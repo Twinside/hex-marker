@@ -1,0 +1,13 @@
+.hidden {
+    display: none;
+}
+
+.region {
+    border: 1px solid gray;
+    box-sizing: border-box;
+}
+
+.region:hover {
+    color: rgb(240, 240, 255);
+    background-color: rgb(70, 70, 90);
+}

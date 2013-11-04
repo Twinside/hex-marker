@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-import Control.Monad( when )
+import Control.Applicative( (<$>), (<*>) )
+import Control.Monad( when, replicateM )
 import Data.Marker
 import Data.Word
 import qualified Data.ByteString as B
@@ -26,6 +27,39 @@ data JpgFrameHeader = JpgFrameHeader
     , jpgComponents          :: ![JpgComponent]
     }
     deriving Show
+instance Markeable JpgComponent where
+    parseMark txt = subZone txt $ do
+        ident <- markWord8 "compnent identifier"
+        (horiz, vert) <- mark4bitsEach "sampling factor"
+        quantTableIndex <- markWord8 "Quant table index"
+        return JpgComponent
+            { componentIdentifier = ident
+            , horizontalSamplingFactor = horiz
+            , verticalSamplingFactor = vert
+            , quantizationTableDest = quantTableIndex
+            }
+
+instance Markeable JpgFrameHeader where
+    parseMark txt = subZone txt $ do
+        beginOffset <- markBytesRead
+        hdr <- JpgFrameHeader
+            <$> markWord16be "frame length"
+            <*> markWord8 "Sample precision"
+            <*> markWord16be "Height"
+            <*> markWord16be "Width"
+
+        compCount <- markWord8 "component count"
+        finalHdr <- hdr compCount
+                 <$> replicateM (fromIntegral compCount) (parseMark "comp descr")
+
+        endOffset <- markBytesRead
+        let frameHdrLength = fromIntegral (jpgFrameHeaderLength finalHdr)
+        when (beginOffset - endOffset < frameHdrLength) $ do
+           _ <- markByteString "padding" $
+                    frameHdrLength - (endOffset - beginOffset)
+           return ()
+
+        return finalHdr
 
 data JpgFrameKind =
       JpgBaselineDCTHuffman
@@ -124,19 +158,14 @@ instance Markeable JpgFrameKind where
 parseFrames :: Marker [JpgFrame]
 parseFrames = do
     kind <- parseMark "" :: Marker JpgFrameKind
-    {-
     let parseNextFrame = do
-            word <- getWord8
+            word <- markWord8 "JPG Mark starter"
             when (word /= 0xFF) $ do
-                readedData <- bytesRead
-                fail $ "Invalid Frame marker (" ++ show word
-                     ++ ", bytes read : " ++ show readedData ++ ")"
+                fail $ "Invalid Frame marker (" ++ show word ++ ")"
             parseFrames
-            -}
-    return []
-{-  
     case kind of
         JpgEndOfImage -> return []
+{-  
         JpgAppSegment c ->
             trace "AppSegment" $
             (\frm lst -> JpgAppFrame c frm : lst) <$> takeCurrentFrame <*> parseNextFrame
@@ -164,8 +193,9 @@ parseFrames = do
                   Right lst -> JpgScanBlob frm d : lst
             ) <$> get <*> getRemainingLazyBytes
 
-        _ -> (\hdr lst -> JpgScans kind hdr : lst) <$> get <*> parseNextFrame
 -}
+        _ -> (\hdr lst -> JpgScans kind hdr : lst)
+                    <$> parseMark "JpgScans hdr"  <*> parseNextFrame
 
 
 instance Markeable JpgImage where
@@ -173,7 +203,9 @@ instance Markeable JpgImage where
         v <- markWord16be "Jpeg start marker"
         when (v /= 0xFFD8)
              (fail "Invalid Jpeg start marker")
-        return $ JpgImage []
+        skipUntil (== 0xFF)
+        _ <- markWord8 "Marker start"
+        JpgImage <$> parseFrames 
 
 main :: IO ()
 main = do

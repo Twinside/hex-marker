@@ -26,7 +26,8 @@ library
                        bytestring >= 0.10,
                        vector,
                        blaze-markup,
-                       blaze-html
+                       blaze-html,
+                       groom
   -- hs-source-dirs:      
   default-language:    Haskell2010
 
@@ -39,5 +40,6 @@ Executable marker-test
                    vector,
                    blaze-markup,
                    blaze-html,
-                   hex-marker
+                   hex-marker,
+                   groom
 

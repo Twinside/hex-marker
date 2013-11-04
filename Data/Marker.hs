@@ -3,6 +3,8 @@
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Marker( Marker
                   , Markeable( .. )
+                  , markBytesRead
+                  , mark4bitsEach
                   , markWord8
                   , markWord16be
                   , markWord16le
@@ -12,25 +14,32 @@ module Data.Marker( Marker
                   , delimitateRegion
                   , skipUntil
                   , renderByteDump
+                  , subZone
                   ) where
 
 import Control.Applicative( (<$>), (<*>), pure, (<*) )
 import Control.Monad( when )
 import Data.Monoid( mempty )
-import Data.Bits( (.|.), unsafeShiftL )
+import Data.Bits( (.|.), (.&.)
+                , unsafeShiftL
+                , unsafeShiftR
+                )
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as LB
 import qualified Data.Text as T
 import Data.Word( Word8, Word16, Word32 )
 import Data.Vector( (!) )
 import qualified Data.Vector as V
-import Control.Monad.RWS( RWS, ask, asks, gets, tell, runRWS, modify )
+import Control.Monad.RWS( RWS, ask, asks, gets
+                        , tell, runRWS, modify
+                        , put )
 import Control.Monad.Error( ErrorT, lift, throwError, runErrorT )
 import Text.Printf( printf )
 import Text.Blaze( Markup, toMarkup )
 import qualified Text.Blaze.Html5 as H
 import qualified Text.Blaze.Html5.Attributes as A
 import Text.Blaze.Renderer.Utf8( renderMarkup )
+import Text.Groom
 
 data MarkEntry = MarkEntry
     { markName     :: !T.Text
@@ -72,15 +81,30 @@ byteTexts :: V.Vector T.Text
 byteTexts = V.fromListN (b + 1) [T.pack $ printf "%02X " v  | v <- [0 .. b]]
   where b = fromIntegral $ (maxBound :: Word8)
 
+dumpDescription :: MarkEntry -> Markup
+dumpDescription entry = H.div H.! A.class_ "hidden info" $ do
+    H.span H.! A.class_ "name" $ toMarkup $ markName entry
+    H.span H.! A.class_ "offset" $ toMarkup $ show $ markOffset entry
+    H.span H.! A.class_ "size" $ toMarkup $ show $ markSize entry
+    H.span H.! A.class_ "data" $ H.pre $ toMarkup $ groom $ markShow entry
+
 dumpMarkers :: Int -> MarkerSetup -> [MarkEntry] -> Markup
 dumpMarkers bytePerLine setup lst = fst $ markuper (zip [0 :: Int ..] lst) True 0
   where rawData = setupData setup
 
         markuper [] _ lineIndex = (mempty, lineIndex)
+        markuper ((_, entry@MarkEntry { markChildren = _ : _ }) : rest)
+          needEnclosing lineIndex =
+              (children >> next, finalIndex)
+            where (html, childIndex) =
+                        markuper (zip [0..] $ markChildren entry) True lineIndex
+                  children = H.span H.! A.class_ "subregion" $ html
+                  (next, finalIndex) = markuper rest needEnclosing childIndex
+
         markuper ((idx, entry) : rest) needEnclosing lineIndex 
             -- If we're accross the max, split and render
             | lineIndex + markSize entry > bytePerLine = (finalMarkup >> next, ixFinal)
-                where diff = bytePerLine - lineIndex - 1
+                where diff = bytePerLine - lineIndex
                       firstPart = entry { markSize = diff }
                       secondPart = entry
                           { markSize = markSize entry - diff
@@ -102,7 +126,9 @@ dumpMarkers bytePerLine setup lst = fst $ markuper (zip [0 :: Int ..] lst) True 
                   size = markSize entry
                   bytes = [byteTexts ! fromIntegral (B.index rawData o) 
                                         | o <- [offset .. offset + size - 1]]
-                  spanTag = H.span H.! A.id (H.toValue $ "region_" ++ show idx)
+                  spanTag = H.span H.! A.id (H.toValue $ show idx)
+                                   H.! A.class_ (H.toValue ("region" :: T.Text))
+                                   H.! A.title (H.toValue $ markName entry)
                   markup
                     | not needEnclosing = toMarkup $ T.concat bytes
                     | otherwise = spanTag . toMarkup $ T.concat bytes
@@ -120,21 +146,33 @@ renderByteDump str action = renderMarkup document
         document = H.html $ do
             H.head $ do
                 H.title "Hex dump"
+                H.link H.! A.rel "stylesheet"
+                       H.! A.type_ "text/css"
+                       H.! A.href "hexmark.css"
 
             H.body $ do
                 toMarkup $ "Readed " ++ show readedSize
                 H.div $ toMarkup txt
                 H.table $ H.tr $ do
                     H.td $ H.pre $ dumpMarkers 16 setup history
+                    H.td $ mapM_ dumpDescription history
 
 getByte :: Marker Word8
 getByte = B.index <$> asks setupData <*> gets markerIndex
+
+markBytesRead :: Marker Int
+markBytesRead = gets markerIndex
 
 addIndex :: Int -> Marker ()
 addIndex size = lift . modify $ \s -> s { markerIndex = markerIndex s + size }
 
 incIndex :: Marker ()
 incIndex = addIndex 1
+
+mark4bitsEach :: T.Text -> Marker (Word8, Word8)
+mark4bitsEach txt = do
+    v <- markWord8 txt
+    return ((v `unsafeShiftR` 4) .&. 0xFF, v .&. 0xFF)
 
 markWord8 :: T.Text -> Marker Word8
 markWord8 txt = do
@@ -282,13 +320,39 @@ delimitateRegion str predicate action = do
             | otherwise = case B.uncons currentStr of
                 Just (_, rest) -> delimitate (i + 1) rest
                 Nothing -> (i + 1, B.empty)
-                
+
+subZone :: (Show a) => T.Text -> Marker a -> Marker a
+subZone txt action = do
+    offset <- gets markerIndex
+    currentSetup <- ask
+    let (v, MarkerState endOffset, history) =
+            runRWS (runErrorT action) currentSetup (MarkerState offset)
+
+        teller value =
+            tell [MarkEntry {
+                    markName = txt,
+                    markShow = value,
+                    markOffset = offset,
+                    markSize = endOffset - offset,
+                    markChildren = history
+                }]
+    put $ MarkerState endOffset
+    case v of
+      Left err -> teller (T.pack err) >> throwError err
+      Right val -> teller (represent val) >> return val
 
 skipUntil :: (Word8 -> Bool) -> Marker ()
 skipUntil predicate = do
    idx <- gets markerIndex
    rawData <- asks setupData
    let new_idx = delimitate rawData idx
+   tell [MarkEntry
+     { markName = "skipped"
+     , markShow = ""
+     , markOffset = idx
+     , markSize = new_idx - idx
+     , markChildren = []
+     }]
    modify $ \s -> s { markerIndex = new_idx }
   where delimitate str i 
             | i >= B.length str = i
