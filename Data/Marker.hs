@@ -101,7 +101,7 @@ dumpMarkers bytePerLine setup lst = fst $ markuper (zip [0 :: Int ..] lst) True 
                   offset = markOffset entry
                   size = markSize entry
                   bytes = [byteTexts ! fromIntegral (B.index rawData o) 
-                                        | o <- [offset .. offset + size]]
+                                        | o <- [offset .. offset + size - 1]]
                   spanTag = H.span H.! A.id (H.toValue $ "region_" ++ show idx)
                   markup
                     | not needEnclosing = toMarkup $ T.concat bytes
@@ -110,15 +110,22 @@ dumpMarkers bytePerLine setup lst = fst $ markuper (zip [0 :: Int ..] lst) True 
 renderByteDump :: B.ByteString -> Marker a -> LB.ByteString
 renderByteDump str action = renderMarkup document
   where setup = MarkerSetup { setupData = str, setupFilename = "" }
-        (_, MarkerState readedSize, history) =
+        (finalValue, MarkerState readedSize, history) =
             runRWS (runErrorT action) setup (MarkerState 0)
+
+        txt = case finalValue of
+          Left err -> "Error : " ++ err
+          Right _v -> "OK"
+
         document = H.html $ do
             H.head $ do
                 H.title "Hex dump"
 
             H.body $ do
                 toMarkup $ "Readed " ++ show readedSize
-                dumpMarkers 16 setup history
+                H.div $ toMarkup txt
+                H.table $ H.tr $ do
+                    H.td $ H.pre $ dumpMarkers 16 setup history
 
 getByte :: Marker Word8
 getByte = B.index <$> asks setupData <*> gets markerIndex
