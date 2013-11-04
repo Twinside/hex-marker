@@ -1,3 +1,6 @@
 
-all:
-	ghc -o marker -Wall marker.hs
+HOME:=$(HOMEPATH)
+
+build:
+	$(HOME)/AppData/Roaming/cabal/bin/cabal build
+
