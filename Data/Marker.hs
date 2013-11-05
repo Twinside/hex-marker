@@ -11,12 +11,14 @@ module Data.Marker( Marker
                   , markWord32be
                   , markWord32le
                   , markByteString
+                  , markAllRemainingByte
                   , delimitateRegion
                   , skipUntil
                   , renderByteDump
                   , subZone
                   ) where
 
+import Data.Monoid( (<>) )
 import Control.Applicative( (<$>), (<*>), pure, (<*) )
 import Control.Monad( when )
 import Data.Monoid( mempty )
@@ -26,6 +28,7 @@ import Data.Bits( (.|.), (.&.)
                 )
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as LB
+import Data.List(intersperse)
 import qualified Data.Text as T
 import Data.Word( Word8, Word16, Word32 )
 import Data.Vector( (!) )
@@ -68,7 +71,7 @@ class Representable a where
     represent :: a -> T.Text
 
 instance Show a => Representable a where
-    represent = T.pack . show
+    represent = T.pack . groom
 
 class Representable a => Markeable a where
     parseMark :: T.Text -> Marker a
@@ -81,24 +84,40 @@ byteTexts :: V.Vector T.Text
 byteTexts = V.fromListN (b + 1) [T.pack $ printf "%02X " v  | v <- [0 .. b]]
   where b = fromIntegral $ (maxBound :: Word8)
 
-dumpDescription :: MarkEntry -> Markup
-dumpDescription entry = H.div H.! A.class_ "hidden info" $ do
-    H.span H.! A.class_ "name" $ toMarkup $ markName entry
-    H.span H.! A.class_ "offset" $ toMarkup $ show $ markOffset entry
-    H.span H.! A.class_ "size" $ toMarkup $ show $ markSize entry
-    H.span H.! A.class_ "data" $ H.pre $ toMarkup $ groom $ markShow entry
+dumpDescriptions :: [MarkEntry] -> Markup
+dumpDescriptions entries = mapM_ declare $ zip (map (:[]) [0 :: Int ..]) entries
+  where globalTag idx = H.div H.! A.class_ "hidden info" 
+                              H.! A.id (flattenIdx idx)
+        flattenIdx idx =
+            H.toValue . T.pack . ("i_" ++) . concat . intersperse "_" $ map show idx
+
+        declare (idx, entry) = do
+            globalTag idx $ do
+                H.div H.! A.class_ "name" $ toMarkup $ markName entry
+                H.div H.! A.class_ "offset" $ toMarkup $ ("Offset " <>) $ show $ markOffset entry
+                H.div H.! A.class_ "size" $ toMarkup $ ("Size " <>) $ show $ markSize entry
+                H.div H.! A.class_ "data" $ H.pre $ toMarkup $ markShow entry
+
+            mapM_ declare . zip (map (:idx) [0..]) $ markChildren entry
 
 dumpMarkers :: Int -> MarkerSetup -> [MarkEntry] -> Markup
-dumpMarkers bytePerLine setup lst = fst $ markuper (zip [0 :: Int ..] lst) True 0
+dumpMarkers bytePerLine setup lst = fst $ markuper (zip (map (:[]) [0 :: Int ..]) lst) True 0
   where rawData = setupData setup
 
+        spanTag (idx, entry) = H.span H.! A.id (H.toValue elemId)
+                                      H.! A.class_ (H.toValue ("region" :: T.Text))
+                                      H.! A.title (H.toValue $ markName entry)
+          where elemId  = "r_" ++ concat (intersperse "_" $ map show idx)
+                   
+
         markuper [] _ lineIndex = (mempty, lineIndex)
-        markuper ((_, entry@MarkEntry { markChildren = _ : _ }) : rest)
+        markuper ((idx, entry@MarkEntry { markChildren = _ : _ }) : rest)
           needEnclosing lineIndex =
               (children >> next, finalIndex)
             where (html, childIndex) =
-                        markuper (zip [0..] $ markChildren entry) True lineIndex
-                  children = H.span H.! A.class_ "subregion" $ html
+                        markuper (zip (map (:idx) [0..]) $ markChildren entry) True lineIndex
+                  children = H.span H.! A.class_ "subregion"
+                                    H.! A.title (H.toValue $ markName entry) $ html
                   (next, finalIndex) = markuper rest needEnclosing childIndex
 
         markuper ((idx, entry) : rest) needEnclosing lineIndex 
@@ -115,7 +134,7 @@ dumpMarkers bytePerLine setup lst = fst $ markuper (zip [0 :: Int ..] lst) True 
                       (after, ix2) = markuper [(idx, secondPart)] False 0
                       (next, ixFinal) =  markuper rest True ix2
                       combinedMarkup = before >> "\n" >> after
-                      finalMarkup | needEnclosing = H.span combinedMarkup
+                      finalMarkup | needEnclosing = spanTag (idx, entry) combinedMarkup
                                   | otherwise = combinedMarkup
 
                     
@@ -126,12 +145,9 @@ dumpMarkers bytePerLine setup lst = fst $ markuper (zip [0 :: Int ..] lst) True 
                   size = markSize entry
                   bytes = [byteTexts ! fromIntegral (B.index rawData o) 
                                         | o <- [offset .. offset + size - 1]]
-                  spanTag = H.span H.! A.id (H.toValue $ show idx)
-                                   H.! A.class_ (H.toValue ("region" :: T.Text))
-                                   H.! A.title (H.toValue $ markName entry)
                   markup
                     | not needEnclosing = toMarkup $ T.concat bytes
-                    | otherwise = spanTag . toMarkup $ T.concat bytes
+                    | otherwise = spanTag (idx, entry) . toMarkup $ T.concat bytes
 
 renderByteDump :: B.ByteString -> Marker a -> LB.ByteString
 renderByteDump str action = renderMarkup document
@@ -143,19 +159,25 @@ renderByteDump str action = renderMarkup document
           Left err -> "Error : " ++ err
           Right _v -> "OK"
 
+        bytePerLine = 16
         document = H.html $ do
             H.head $ do
                 H.title "Hex dump"
                 H.link H.! A.rel "stylesheet"
                        H.! A.type_ "text/css"
                        H.! A.href "hexmark.css"
+                H.script H.! A.src "jquery-2.0.3.min.js" $ ""
+                H.script H.! A.src "hexmark.js" $ ""
 
             H.body $ do
                 toMarkup $ "Readed " ++ show readedSize
                 H.div $ toMarkup txt
                 H.table $ H.tr $ do
-                    H.td $ H.pre $ dumpMarkers 16 setup history
-                    H.td $ mapM_ dumpDescription history
+                    H.td $ H.pre H.! A.class_ "offsets" $ toMarkup 
+                         $ T.concat [ T.pack $ printf "%08X\n" v | v <- [0, bytePerLine .. B.length str]]
+                    H.td $ H.pre $ dumpMarkers bytePerLine setup history
+
+                H.div H.! A.class_ "infocontainer" $ dumpDescriptions history
 
 getByte :: Marker Word8
 getByte = B.index <$> asks setupData <*> gets markerIndex
@@ -264,6 +286,12 @@ markWord32le txt = do
 
     pure v
 
+markAllRemainingByte :: T.Text -> Marker B.ByteString
+markAllRemainingByte txt = do
+    offset <- gets markerIndex
+    str <- asks setupData
+    markByteString txt $ B.length str - offset
+
 markByteString :: T.Text -> Int -> Marker B.ByteString
 markByteString txt size = do
     offset <- gets markerIndex
@@ -271,13 +299,14 @@ markByteString txt size = do
     when (B.length str < offset + size) $
         throwError "Requiring too much data - markByteString"
 
-    tell [MarkEntry {
-            markName = txt,
-            markShow = "<STR>",
-            markOffset = offset,
-            markSize = size,
-            markChildren = []
-        }]
+    when (size > 0) $
+        tell [MarkEntry {
+                markName = txt,
+                markShow = "<STR>",
+                markOffset = offset,
+                markSize = size,
+                markChildren = []
+            }]
 
     addIndex size
     pure . B.take size $ B.drop offset str
@@ -286,40 +315,33 @@ delimitateRegion :: (Show a) => T.Text -> (B.ByteString -> Bool) -> Marker a -> 
 delimitateRegion str predicate action = do
     offset <- gets markerIndex
     currentSetup <- ask
-    let (_size, localString) = delimitate (0 :: Int) rawData
-        rawData = setupData currentSetup
-        subSetup = currentSetup { setupData = localString }
+    let rawData = B.drop offset $ setupData currentSetup
+        size = delimitate (0 :: Int) rawData
+        subSetup = currentSetup { setupData = B.take size rawData }
+
         (v, MarkerState readedSize, history) =
             runRWS (runErrorT action) subSetup (MarkerState 0)
+        teller val =
+            when (readedSize > 0) $
+                tell [MarkEntry {
+                        markName = str,
+                        markShow = val,
+                        markOffset = offset,
+                        markSize = readedSize,
+                        markChildren = updateOffset offset <$> history
+                    }]
+
     addIndex readedSize
     case v of
-      Left err -> do
-          tell [MarkEntry {
-                    markName = str,
-                    markShow = T.pack err,
-                    markOffset = offset,
-                    markSize = readedSize,
-                    markChildren = updateOffset offset <$> history
-                }]
-          throwError err
-
-      Right val -> do
-          tell [MarkEntry {
-                    markName = str,
-                    markShow = represent val,
-                    markOffset = offset,
-                    markSize = readedSize,
-                    markChildren = updateOffset offset <$> history
-                }]
-
-          return val
+      Left err -> teller (T.pack err) >> throwError err
+      Right val -> teller (represent val) >> return val
 
   where updateOffset ofs entry = entry { markOffset = ofs + markOffset entry }
         delimitate i currentStr
-            | predicate currentStr = (i, currentStr)
+            | predicate currentStr = i
             | otherwise = case B.uncons currentStr of
                 Just (_, rest) -> delimitate (i + 1) rest
-                Nothing -> (i + 1, B.empty)
+                Nothing -> i + 1
 
 subZone :: (Show a) => T.Text -> Marker a -> Marker a
 subZone txt action = do
@@ -328,7 +350,7 @@ subZone txt action = do
     let (v, MarkerState endOffset, history) =
             runRWS (runErrorT action) currentSetup (MarkerState offset)
 
-        teller value =
+        teller value = when (endOffset - offset > 0) $
             tell [MarkEntry {
                     markName = txt,
                     markShow = value,
@@ -346,13 +368,14 @@ skipUntil predicate = do
    idx <- gets markerIndex
    rawData <- asks setupData
    let new_idx = delimitate rawData idx
-   tell [MarkEntry
-     { markName = "skipped"
-     , markShow = ""
-     , markOffset = idx
-     , markSize = new_idx - idx
-     , markChildren = []
-     }]
+   when (new_idx - idx > 0) $
+    tell [MarkEntry
+        { markName = "skipped"
+        , markShow = ""
+        , markOffset = idx
+        , markSize = new_idx - idx
+        , markChildren = []
+        }]
    modify $ \s -> s { markerIndex = new_idx }
   where delimitate str i 
             | i >= B.length str = i

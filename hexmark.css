@@ -1,13 +1,40 @@
-.hidden {
-    display: none;
-}
+.hidden { display: none; }
 
 .region {
-    border: 1px solid gray;
-    box-sizing: border-box;
+    /*outline: 1px solid gray;*/
+    /*box-shadow: 0 -1px 0 #000;*/
+    /*box-sizing: border-box;*/
+    border-left: 1px solid black;
+    margin-left: -1px;
 }
 
 .region:hover {
     color: rgb(240, 240, 255);
     background-color: rgb(70, 70, 90);
 }
+
+.offsets
+{
+    color: rgb(150, 150, 150);
+    margin-right: 5px;
+}
+
+.infocontainer
+{
+    position: fixed;
+    top: 0px;
+    left: 500px;
+}
+
+pre
+{
+    font-family: consolas, monospace;
+    font-size: 12px;
+}
+
+.visible_info
+{
+    border: 1px solid black;
+    margin-top: 10px;
+}
+
