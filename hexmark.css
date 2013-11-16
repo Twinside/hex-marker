@@ -17,6 +17,7 @@
 {
     color: rgb(150, 150, 150);
     margin-right: 5px;
+    display: none;
 }
 
 .infocontainer
@@ -24,6 +25,8 @@
     position: fixed;
     top: 0px;
     left: 500px;
+    height: 100%;
+    overflow: scroll;
 }
 
 pre

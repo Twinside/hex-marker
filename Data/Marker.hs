@@ -10,6 +10,11 @@ module Data.Marker( Marker
                   , markWord16le
                   , markWord32be
                   , markWord32le
+                  , markTransformWord8
+                  , markTransformWord16be
+                  , markTransformWord16le
+                  , markTransformWord32be
+                  , markTransformWord32le
                   , markByteString
                   , markAllRemainingByte
                   , delimitateRegion
@@ -197,53 +202,69 @@ mark4bitsEach txt = do
     return ((v `unsafeShiftR` 4) .&. 0xFF, v .&. 0xFF)
 
 markWord8 :: T.Text -> Marker Word8
-markWord8 txt = do
+markWord8 = markTransformWord8 id
+
+markTransformWord8 :: Representable a
+                   => (Word8 -> a) -> T.Text -> Marker a
+markTransformWord8 transform txt = do
     offset <- gets markerIndex
     v <- getByte <* incIndex
+    let final = transform v
     tell [MarkEntry { 
             markName = txt,
-            markShow = represent v,
+            markShow = represent final,
             markOffset = offset,
             markSize = 1,
             markChildren = []
         }]
 
-    pure v
+    pure final
 
-markWord16be :: T.Text -> Marker Word16
-markWord16be txt = do
+markTransformWord16be :: Representable a
+                      => (Word16 -> a) -> T.Text -> Marker a
+markTransformWord16be transform txt = do
     offset <- gets markerIndex
     v1 <- fromIntegral <$> getByte <* incIndex
     v2 <- fromIntegral <$> getByte <* incIndex
     let v = v1 `unsafeShiftL` 8 .|. v2
+        final = transform v
     tell [MarkEntry { 
             markName = txt,
-            markShow = represent v,
+            markShow = represent final,
             markOffset = offset,
             markSize = 2,
             markChildren = []
         }] 
 
-    pure v
+    pure final
 
-markWord16le :: T.Text -> Marker Word16
-markWord16le txt = do
+markWord16be :: T.Text -> Marker Word16
+markWord16be = markTransformWord16be id
+
+markTransformWord16le :: Representable a
+                      => (Word16 -> a) -> T.Text -> Marker a
+markTransformWord16le transform txt = do
     offset <- gets markerIndex
     v1 <- fromIntegral <$> getByte <* incIndex
     v2 <- fromIntegral <$> getByte <* incIndex
     let v = v1 .|. v2 `unsafeShiftL` 8
+        final = transform v
     tell [MarkEntry { 
             markName = txt,
-            markShow = represent v,
+            markShow = represent final,
             markOffset = offset,
             markSize = 2,
             markChildren = []
         }] 
 
-    pure v
+    pure final
 
-markWord32be :: T.Text -> Marker Word32
-markWord32be txt = do
+markWord16le :: T.Text -> Marker Word16
+markWord16le = markTransformWord16le id
+
+markTransformWord32be :: Representable a
+                      => (Word32 -> a) -> T.Text -> Marker a
+markTransformWord32be transform txt = do
     offset <- gets markerIndex
     v1 <- fromIntegral <$> getByte <* incIndex
     v2 <- fromIntegral <$> getByte <* incIndex
@@ -253,19 +274,24 @@ markWord32be txt = do
          .|. v2 `unsafeShiftL` 16 
          .|. v3 `unsafeShiftL` 8
          .|. v4
+        final = transform v
 
     tell [MarkEntry { 
             markName = txt,
-            markShow = represent v,
+            markShow = represent final,
             markOffset = offset,
             markSize = 4,
             markChildren = []
         }] 
 
-    pure v
+    pure final
 
-markWord32le :: T.Text -> Marker Word32
-markWord32le txt = do
+markWord32be :: T.Text -> Marker Word32
+markWord32be = markTransformWord32be id
+
+markTransformWord32le :: Representable a
+                      => (Word32 -> a) -> T.Text -> Marker a
+markTransformWord32le transform txt = do
     offset <- gets markerIndex
     v1 <- fromIntegral <$> getByte <* incIndex
     v2 <- fromIntegral <$> getByte <* incIndex
@@ -275,16 +301,20 @@ markWord32le txt = do
          .|. v3 `unsafeShiftL` 16 
          .|. v2 `unsafeShiftL` 8
          .|. v1
+        final = transform v
 
     tell [MarkEntry { 
             markName = txt,
-            markShow = represent v,
+            markShow = represent final,
             markOffset = offset,
             markSize = 4,
             markChildren = []
         }] 
 
-    pure v
+    pure final
+
+markWord32le :: T.Text -> Marker Word32
+markWord32le = markTransformWord32le id
 
 markAllRemainingByte :: T.Text -> Marker B.ByteString
 markAllRemainingByte txt = do
