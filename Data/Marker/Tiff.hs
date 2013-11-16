@@ -5,7 +5,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE OverloadedStrings #-}
-module Tiff where
+module Data.Marker.Tiff( TiffInfo, markTiff ) where
 
 import Control.Applicative( (<$>), (<*>), pure )
 import Control.Monad( when, replicateM, foldM_ )
@@ -518,4 +518,6 @@ instance MarkeableParam B.ByteString TiffInfo where
         <*> findPalette cleaned
         <*> (V.fromList <$> extDefault [2, 2] TagYCbCrSubsampling)
 
+markTiff :: B.ByteString -> Marker TiffInfo
+markTiff f = getP "TiffFile" f
 

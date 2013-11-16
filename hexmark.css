@@ -6,6 +6,11 @@
     /*box-sizing: border-box;*/
     border-left: 1px solid black;
     margin-left: -1px;
+    background-color: rgba(10, 10, 30, 0.1);
+}
+
+.subregion {
+    background-color: rgba(10, 10, 30, 0.1);
 }
 
 .region:hover {

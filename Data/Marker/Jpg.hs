@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Jpg where
+module Data.Marker.Jpg( JpgImage, markJpeg ) where
 
 import Control.Applicative( (<$>), (<*>) )
 import Control.Monad( when, replicateM, forM )
@@ -178,11 +178,10 @@ data JpgImage = JpgImage { jpgFrame :: [JpgFrame]}
     deriving Show
 
 instance Markeable JpgFrameKind where
-    parseMark _ = do
-        -- no lookahead :(
-        {-word <- getWord8-}
-        word2 <- markWord8 "JPG Frame kind"
-        return $ case word2 of
+  -- no lookahead :(
+  {-word <- getWord8-}
+  parseMark _ = markTransformWord8 aux "JPG Frame kind"
+    where aux word2 = case word2 of
             0xC0 -> JpgBaselineDCTHuffman
             0xC1 -> JpgExtendedSequentialDCTHuffman
             0xC2 -> JpgProgressiveDCTHuffman
@@ -311,4 +310,7 @@ instance Markeable JpgImage where
         skipUntil (== 0xFF)
         _ <- markWord8 "Marker start"
         JpgImage <$> parseFrames 
+
+markJpeg :: Marker JpgImage
+markJpeg = parseMark ""
 

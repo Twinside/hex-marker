@@ -10,10 +10,9 @@ import qualified Data.Text as T
 import Data.Word
 
 import Data.Marker
+import Data.Marker.Jpg
+import Data.Marker.Tiff
 import System.Environment( getArgs )
-
-import Jpg
-import Tiff
 
 import Debug.Trace
 import Text.Printf
@@ -22,12 +21,15 @@ main :: IO ()
 main = do
     args <- getArgs
     case args of
-      (filename:outfile:_) -> do
+      ("tiff":filename:outfile:_) -> do
           f <- B.readFile filename
-          let tiff = getP "TiffFile" f :: Marker TiffInfo
-              {-jpg = parseMark "" :: Marker JpgImage-}
-          let out = renderByteDump f tiff
+          let out = renderByteDump f $ markTiff f
           L.writeFile outfile out
+
+      ("jpg":filename:outfile:_) -> do
+          f <- B.readFile filename
+          L.writeFile outfile $ renderByteDump f markJpeg
+
 
       _ -> putStrLn "not enough arguments"
 
