@@ -8,24 +8,14 @@
 module Data.Marker.Tiff( TiffInfo, markTiff ) where
 
 import Control.Applicative( (<$>), (<*>), pure )
-import Control.Monad( when, replicateM, foldM_ )
-import Control.Monad.ST( ST, runST )
-import Control.Monad.Writer.Strict( execWriter, tell, Writer )
-import Data.Int( Int8 )
-import Data.Word( Word8, Word16 )
-import Data.Bits( (.&.), (.|.), unsafeShiftL, unsafeShiftR )
+import Control.Monad( when, replicateM )
+import Data.Word( Word16 )
+import Data.Bits( (.&.), unsafeShiftR )
 import Data.Marker
-import Data.List( sortBy, mapAccumL )
 import qualified Data.Text as T
 import qualified Data.Vector as V
-import qualified Data.Vector.Storable as VS
-import qualified Data.Vector.Storable.Mutable as M
 import Data.Word( Word32 )
 import qualified Data.ByteString as B
-import qualified Data.ByteString.Lazy as Lb
-import qualified Data.ByteString.Unsafe as BU
-
-import Debug.Trace
 
 data Endianness = EndianLittle
                 | EndianBig
@@ -79,10 +69,6 @@ planarConfgOfConstant 0 = pure PlanarConfigContig
 planarConfgOfConstant 1 = pure PlanarConfigContig
 planarConfgOfConstant 2 = pure PlanarConfigSeparate
 planarConfgOfConstant v = fail $ "Unknown planar constant (" ++ show v ++ ")"
-
-constantToPlaneConfiguration :: TiffPlanarConfiguration -> Word16
-constantToPlaneConfiguration PlanarConfigContig = 1
-constantToPlaneConfiguration PlanarConfigSeparate = 2
 
 data TiffCompression =
       CompressionNone           -- 1
@@ -295,7 +281,7 @@ cleanImageFileDirectory ifd@(ImageFileDirectory { ifdCount = 1 }) = aux $ ifdTyp
 cleanImageFileDirectory ifd = ifd
 
 instance MarkeableParam Endianness ImageFileDirectory where
-  getP t endianness = subZone "imagefiledirectory" $
+  getP _t endianness = subZone "imagefiledirectory" $
     ImageFileDirectory <$> getE "tag" <*> getE "type" <*> getE "count" <*> getE "offset"
                        <*> pure ExtendedDataNone
         where getE :: (MarkeableParam Endianness a) => T.Text -> Marker a
@@ -321,7 +307,7 @@ findIFD errorMessage tag lst =
         (x:_) -> pure x
 
 findPalette :: [ImageFileDirectory] -> Marker (Maybe a)
-findPalette ifds = return Nothing
+findPalette _ = return Nothing
 
 findIFDData :: String -> TiffTag -> [ImageFileDirectory] -> Marker Word32
 findIFDData msg tag lst = ifdOffset <$> findIFD msg tag lst
@@ -357,20 +343,20 @@ findIFDExtDefaultData d tag lst =
                     "Can't parse tag " ++ show tag ++ " " ++ show (ifdExtended x)
 
 data TiffInfo = TiffInfo
-    { tiffHeader             :: TiffHeader
-    , tiffWidth              :: Word32
-    , tiffHeight             :: Word32
-    , tiffColorspace         :: TiffColorspace
-    , tiffSampleCount        :: Word32
-    , tiffRowPerStrip        :: Word32
-    , tiffPlaneConfiguration :: TiffPlanarConfiguration
-    , tiffSampleFormat       :: [TiffSampleFormat]
-    , tiffBitsPerSample      :: V.Vector Word32
-    , tiffCompression        :: TiffCompression
-    , tiffStripSize          :: V.Vector Word32
-    , tiffOffsets            :: V.Vector Word32
-    , tiffPalette            :: Maybe Int
-    , tiffYCbCrSubsampling   :: V.Vector Word32
+    { _tiffHeader             :: TiffHeader
+    , _tiffWidth              :: Word32
+    , _tiffHeight             :: Word32
+    , _tiffColorspace         :: TiffColorspace
+    , _tiffSampleCount        :: Word32
+    , _tiffRowPerStrip        :: Word32
+    , _tiffPlaneConfiguration :: TiffPlanarConfiguration
+    , _tiffSampleFormat       :: [TiffSampleFormat]
+    , _tiffBitsPerSample      :: V.Vector Word32
+    , _tiffCompression        :: TiffCompression
+    , _tiffStripSize          :: V.Vector Word32
+    , _tiffOffsets            :: V.Vector Word32
+    , _tiffPalette            :: Maybe Int
+    , _tiffYCbCrSubsampling   :: V.Vector Word32
     }
     deriving Show
 
@@ -407,78 +393,6 @@ unPackCompression = aux
     aux 6 = pure CompressionJPEG
     aux 32773 = pure CompressionPackBit
     aux v = fail $ "Unknown compression scheme " ++ show v
-
-data YCbCrSubsampling = YCbCrSubsampling 
-    { ycbcrWidth        :: !Int
-    , ycbcrHeight       :: !Int
-    , ycbcrImageWidth   :: !Int
-    , ycbcrStripHeight  :: !Int
-    }
-
-ifdSingleLong :: TiffTag -> Word32 -> Writer [ImageFileDirectory] ()
-ifdSingleLong tag = ifdMultiLong tag . V.singleton
-
-ifdSingleShort :: Endianness -> TiffTag -> Word16
-               -> Writer [ImageFileDirectory] ()
-ifdSingleShort endian tag = ifdMultiShort endian tag . V.singleton . fromIntegral
-
-ifdMultiLong :: TiffTag -> V.Vector Word32 -> Writer [ImageFileDirectory] ()
-ifdMultiLong tag v = tell . pure $ ImageFileDirectory
-        { ifdIdentifier = tag
-        , ifdType       = TypeLong
-        , ifdCount      = fromIntegral $ V.length v
-        , ifdOffset     = offset
-        , ifdExtended   = extended
-        }
-  where (offset, extended)
-                | V.length v > 1 = (0, ExtendedDataLong v)
-                | otherwise = (V.head v, ExtendedDataNone)
-
-ifdMultiShort :: Endianness -> TiffTag -> V.Vector Word32
-              -> Writer [ImageFileDirectory] ()
-ifdMultiShort endian tag v = tell . pure $ ImageFileDirectory
-        { ifdIdentifier = tag
-        , ifdType       = TypeShort
-        , ifdCount      = size
-        , ifdOffset     = offset
-        , ifdExtended   = extended
-        }
-    where size = fromIntegral $ V.length v
-          (offset, extended)
-                | size > 2 = (0, ExtendedDataShort $ V.map fromIntegral v)
-                | size == 2 =
-                    let v1 = fromIntegral $ V.head v
-                        v2 = fromIntegral $ v `V.unsafeIndex` 1
-                    in
-                    case endian of
-                      EndianLittle -> (v2 `unsafeShiftL` 16 .|. v1, ExtendedDataNone)
-                      EndianBig -> (v1 `unsafeShiftL` 16 .|. v2, ExtendedDataNone)
-
-                | otherwise = case endian of
-                    EndianLittle -> (V.head v, ExtendedDataNone)
-                    EndianBig -> (V.head v `unsafeShiftL` 16, ExtendedDataNone)
-
--- | Given an official offset and a list of IFD, update the offset information
--- of the IFD with extended data.
-setupIfdOffsets :: Word32 -> [ImageFileDirectory] -> [ImageFileDirectory]
-setupIfdOffsets initialOffset lst = snd $ mapAccumL updater startExtended lst
-  where ifdElementCount = fromIntegral $ length lst
-        ifdSize = 12
-        ifdCountSize = 2
-        nextOffsetSize = 4
-        startExtended = initialOffset 
-                     + ifdElementCount * ifdSize 
-                     + ifdCountSize + nextOffsetSize
-
-        updater ix ifd@(ImageFileDirectory { ifdExtended = ExtendedDataAscii b }) =
-            (ix + fromIntegral (B.length b), ifd { ifdOffset = ix } )
-        updater ix ifd@(ImageFileDirectory { ifdExtended = ExtendedDataLong v })
-            | V.length v > 1 = ( ix + fromIntegral (V.length v * 4)
-                               , ifd { ifdOffset = ix } )
-        updater ix ifd@(ImageFileDirectory { ifdExtended = ExtendedDataShort v })
-            | V.length v > 2 = ( ix + fromIntegral (V.length v * 2)
-                             , ifd { ifdOffset = ix })
-        updater ix ifd = (ix, ifd)
 
 instance MarkeableParam B.ByteString TiffInfo where
   getP t _ = subZone t $ do

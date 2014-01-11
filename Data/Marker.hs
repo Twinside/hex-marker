@@ -1,25 +1,36 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
-module Data.Marker( Marker
+{-# LANGUAGE OverlappingInstances #-}
+-- | This module help building binary parsers used to mark
+-- data of a file and produce an HTML report displaying all the
+-- information of the file.
+module Data.Marker( -- * Basic types
+                    Marker
                   , Markeable( .. )
                   , markBytesRead
+                  -- * Data markers
+                  -- ** Simple data marking
                   , mark4bitsEach
                   , markWord8
                   , markWord16be
                   , markWord16le
                   , markWord32be
                   , markWord32le
+                  -- ** Marking and atomic transformation
                   , markTransformWord8
                   , markTransformWord16be
                   , markTransformWord16le
                   , markTransformWord32be
                   , markTransformWord32le
+                  -- ** Monadic marking
                   , markTransformWord8M
                   , markTransformWord16beM
                   , markTransformWord16leM
                   , markTransformWord32beM
                   , markTransformWord32leM
+
+                  -- * Combinatoric marking
                   , markByteString
                   , markAllRemainingByte
                   , delimitateRegion
@@ -79,6 +90,9 @@ type Marker a =
 
 class Representable a where
     represent :: a -> T.Text
+
+instance Representable B.ByteString where
+    represent _ = "<STR>"
 
 instance Show a => Representable a where
     represent = T.pack . groom
@@ -369,7 +383,8 @@ markByteString txt size = do
     addIndex size
     pure . B.take size $ B.drop offset str
 
-delimitateRegion :: (Show a) => T.Text -> (B.ByteString -> Bool) -> Marker a -> Marker a
+delimitateRegion :: (Representable a)
+                 => T.Text -> (B.ByteString -> Bool) -> Marker a -> Marker a
 delimitateRegion str predicate action = do
     offset <- gets markerIndex
     currentSetup <- ask
@@ -401,7 +416,7 @@ delimitateRegion str predicate action = do
                 Just (_, rest) -> delimitate (i + 1) rest
                 Nothing -> i + 1
 
-subZone :: (Show a) => T.Text -> Marker a -> Marker a
+subZone :: (Representable a) => T.Text -> Marker a -> Marker a
 subZone txt action = do
     offset <- gets markerIndex
     currentSetup <- ask

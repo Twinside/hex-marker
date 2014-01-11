@@ -4,7 +4,6 @@ module Data.Marker.Jpg( JpgImage, markJpeg ) where
 import Control.Applicative( (<$>), (<*>) )
 import Control.Monad( when, replicateM, forM )
 import qualified Data.ByteString as B
-import qualified Data.ByteString.Lazy as L
 import Data.Int(Int16)
 import Data.Marker
 import qualified Data.Text as T
@@ -22,11 +21,11 @@ data JpgComponent = JpgComponent
 
 data JpgFrameHeader = JpgFrameHeader
     { jpgFrameHeaderLength   :: !Word16
-    , jpgSamplePrecision     :: !Word8
-    , jpgHeight              :: !Word16
-    , jpgWidth               :: !Word16
-    , jpgImageComponentCount :: !Word8
-    , jpgComponents          :: ![JpgComponent]
+    , _jpgSamplePrecision     :: !Word8
+    , _jpgHeight              :: !Word16
+    , _jpgWidth               :: !Word16
+    , _jpgImageComponentCount :: !Word8
+    , _jpgComponents          :: ![JpgComponent]
     }
     deriving Show
 instance Markeable JpgComponent where
@@ -174,7 +173,7 @@ data JpgHuffmanTableSpec = JpgHuffmanTableSpec
     }
     deriving Show
 
-data JpgImage = JpgImage { jpgFrame :: [JpgFrame]}
+data JpgImage = JpgImage { _jpgFrame :: [JpgFrame]}
     deriving Show
 
 instance Markeable JpgFrameKind where
@@ -260,6 +259,15 @@ isScanContent str
               v2 = B.index str 1
               isReset = 0xD0 <= v2 && v2 <= 0xD7
 
+newtype RestartInterval = RestartInterval Word16
+    deriving Show
+
+instance Markeable RestartInterval where
+    parseMark txt = subZone txt $ do
+        size <- markWord16be "restart block size (must be 4)"
+        when (size /= 4) (fail "Invalid jpeg restart interval size")
+        RestartInterval <$> markWord16be "Restart interval value"
+
 parseFrames :: Marker [JpgFrame]
 parseFrames = do
     kind <- parseMark "" :: Marker JpgFrameKind
@@ -286,11 +294,9 @@ parseFrames = do
             (\frm lst -> JpgExtension c frm : lst)
                     <$> takeCurrentFrame "Extension segment data"
                     <*> parseNextFrame
-{-  
         JpgRestartInterval ->
-            trace "RestartInterval" $
-            (\(RestartInterval i) lst -> JpgIntervalRestart i : lst) <$> get <*> parseNextFrame
--}
+            (\(RestartInterval i) lst -> JpgIntervalRestart i : lst)
+                    <$> (parseMark "Restart interval") <*> parseNextFrame
         JpgStartOfScan -> do
             frm <- parseMark "scan header"
             sub <- delimitateRegion "Scan content" isScanContent
@@ -303,7 +309,7 @@ parseFrames = do
 
 
 instance Markeable JpgImage where
-    parseMark txt = do
+    parseMark _txt = do
         v <- markWord16be "Jpeg start marker"
         when (v /= 0xFFD8)
              (fail "Invalid Jpeg start marker")

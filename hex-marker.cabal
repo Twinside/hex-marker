@@ -17,7 +17,10 @@ cabal-version:       >= 1.18
 
 library
   Default-Language: Haskell2010
-  exposed-modules:     Data.Marker
+  exposed-modules:     Data.Marker,
+                       Data.Marker.Jpg,
+                       Data.Marker.Tiff,
+                       Data.Marker.Gif
   Ghc-options:         -Wall
   -- other-modules:       
   -- other-extensions:    
